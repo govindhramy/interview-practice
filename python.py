@@ -6,6 +6,7 @@ Copy-paste into CoderPad. Each problem has:
   - Test runner with assertions
 """
 
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta
 from collections import defaultdict
 
@@ -24,7 +25,10 @@ P1_DATA = [
 
 def group_and_aggregate(records):
     # TODO: return dict like {("u1", "electronics"): 80.0, ("u1", "books"): 20.0, ...}
-    pass
+    user_ctg_agg = defaultdict(int)
+    for record in records:
+        user_ctg_agg[(record["user_id"], record["category"])] += record["amount"]
+    return user_ctg_agg
 
 def test_p1():
     result = group_and_aggregate(P1_DATA)
@@ -53,8 +57,8 @@ P2_DATA = [
 ]
 
 def sort_with_tiebreakers(records):
-    # TODO: return sorted list — score descending, timestamp ascending for ties
-    pass
+    # TODO: return sorted list — score descending, timestamp ascending for ties)
+    return sorted(records, key=lambda record: (-record["score"], record["timestamp"]))
 
 def test_p2():
     result = sort_with_tiebreakers(P2_DATA)
@@ -88,7 +92,14 @@ P3_DATA = [
 
 def deduplicate(records):
     # TODO: return list of one record per email
-    pass
+    ans = {}
+    for record in records:
+        email = record["email"]
+        signup = record["signup_date"]
+        source = record["source"]
+        if email not in ans or signup < ans[email][0] or (source == "organic" and ans[email][1] != "organic"):
+            ans[email] = (signup, source)
+    return [{"email": k, "signup_date": v[0], "source": v[1]} for k,v in ans.items()]
 
 def test_p3():
     result = {r["email"]: r for r in deduplicate(P3_DATA)}
@@ -122,7 +133,25 @@ P4_STREAM_B = [
 
 def merge_streams(stream_a, stream_b):
     # TODO: return merged sorted list, keep both on collision (stable order: a before b)
-    pass
+    i = 0
+    j = 0
+    res = []
+    while i < len(stream_a) or j < len(stream_b):
+        if i == len(stream_a):
+            res.append(stream_b[j])
+            j+=1
+            continue
+        if j == len(stream_b):
+            res.append(stream_a[i])
+            i+=1
+            continue
+        if stream_a[i]["timestamp"] <= stream_b[j]["timestamp"]:
+            res.append(stream_a[i])
+            i+=1
+        else:
+            res.append(stream_b[j])
+            j+=1
+    return res
 
 def test_p4():
     result = merge_streams(P4_STREAM_A, P4_STREAM_B)
@@ -153,7 +182,18 @@ P5_DATA = [
 def add_prev_action(records):
     # TODO: return list of records with added "prev_action" field (None if first for that user)
     # Input is already sorted by timestamp
-    pass
+    prev_actn = {}
+    res = []
+    for record in records:
+        usr = record["user_id"]
+        actn = record["action"]
+
+        new_record = record.copy()
+        new_record["prev_action"] = prev_actn.get(usr)
+        res.append(new_record)
+        
+        prev_actn[usr] = actn
+    return res
 
 def test_p5():
     result = add_prev_action(P5_DATA)
