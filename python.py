@@ -6,8 +6,10 @@ Copy-paste into CoderPad. Each problem has:
   - Test runner with assertions
 """
 
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta
 from collections import defaultdict
+from typing import List
 
 # ============================================================================
 # P1. Group and Aggregate — total spend per user per category
@@ -24,7 +26,17 @@ P1_DATA = [
 
 def group_and_aggregate(records):
     # TODO: return dict like {("u1", "electronics"): 80.0, ("u1", "books"): 20.0, ...}
-    pass
+    
+    user_ctg_agg = {}
+    for record in records:
+        usr = record["user_id"]
+        cat = record["category"]
+        amt = record["amount"]
+        if (usr, cat) not in user_ctg_agg:
+            user_ctg_agg[(usr, cat)] = amt
+        else:
+            user_ctg_agg[(usr, cat)] += amt
+    return user_ctg_agg
 
 def test_p1():
     result = group_and_aggregate(P1_DATA)
@@ -53,8 +65,8 @@ P2_DATA = [
 ]
 
 def sort_with_tiebreakers(records):
-    # TODO: return sorted list — score descending, timestamp ascending for ties
-    pass
+    # TODO: return sorted list — score descending, timestamp ascending for ties)
+    return sorted(records, key=lambda record: (-record["score"], record["timestamp"]))
 
 def test_p2():
     result = sort_with_tiebreakers(P2_DATA)
@@ -88,7 +100,14 @@ P3_DATA = [
 
 def deduplicate(records):
     # TODO: return list of one record per email
-    pass
+    ans = {}
+    for record in records:
+        email = record["email"]
+        signup = record["signup_date"]
+        source = record["source"]
+        if email not in ans or signup < ans[email][0] or (source == "organic" and ans[email][1] != "organic"):
+            ans[email] = (signup, source)
+    return [{"email": k, "signup_date": v[0], "source": v[1]} for k,v in ans.items()]
 
 def test_p3():
     result = {r["email"]: r for r in deduplicate(P3_DATA)}
@@ -122,7 +141,25 @@ P4_STREAM_B = [
 
 def merge_streams(stream_a, stream_b):
     # TODO: return merged sorted list, keep both on collision (stable order: a before b)
-    pass
+    i = 0
+    j = 0
+    res = []
+    while i < len(stream_a) or j < len(stream_b):
+        if i == len(stream_a):
+            res.append(stream_b[j])
+            j+=1
+            continue
+        if j == len(stream_b):
+            res.append(stream_a[i])
+            i+=1
+            continue
+        if stream_a[i]["timestamp"] <= stream_b[j]["timestamp"]:
+            res.append(stream_a[i])
+            i+=1
+        else:
+            res.append(stream_b[j])
+            j+=1
+    return res
 
 def test_p4():
     result = merge_streams(P4_STREAM_A, P4_STREAM_B)
@@ -153,7 +190,18 @@ P5_DATA = [
 def add_prev_action(records):
     # TODO: return list of records with added "prev_action" field (None if first for that user)
     # Input is already sorted by timestamp
-    pass
+    prev_actn = {}
+    res = []
+    for record in records:
+        usr = record["user_id"]
+        actn = record["action"]
+
+        new_record = record.copy()
+        new_record["prev_action"] = prev_actn.get(usr)
+        res.append(new_record)
+        
+        prev_actn[usr] = actn
+    return res
 
 def test_p5():
     result = add_prev_action(P5_DATA)
@@ -199,7 +247,20 @@ def detect_status_changes(records):
     # TODO: return dict {user_id: [list of records where status changed]}
     # Include each user's first record as a "change"
     # Handle: unsorted input, missing/null status
-    pass
+    res = defaultdict(list)
+    for record in records:
+        if "status" not in record or record["status"] is None:
+            continue
+        res[record["user_id"]].append(record)
+    for usr, items in res.items():
+        items.sort(key=lambda rec: rec["timestamp"])
+        filtered = [items[0]]
+        for i in range(1,len(items)):
+            if items[i]["status"] != items[i-1]["status"]:
+                filtered.append(items[i])
+        res[usr] = filtered
+    return res
+
 
 def test_p6():
     result = detect_status_changes(P6_DATA)
@@ -239,7 +300,45 @@ P7_DATA = [
 
 def build_sessions(records, gap_minutes=30):
     # TODO: return list of {"user_id", "session_id", "start", "end", "event_count"}
-    pass
+    usr_ses = defaultdict(list) # list of session info per user
+
+    for record in records: 
+        usr_ses[record["user_id"]].append(record)
+    
+    for events in usr_ses.values():
+        events.sort(key=lambda event: event["timestamp"])
+    
+    res = []
+    for usr, events in usr_ses.items():
+        prev_ses_info = {
+            "user_id" : usr,
+            "session_id" : 1,
+            "start" : events[0]["timestamp"],
+            "end" : events[0]["timestamp"],
+            "event_count" : 1
+        }
+        for i in range(1,len(events)):
+            event = events[i]
+            ts = event["timestamp"]
+
+            prev_ts = prev_ses_info["end"]
+            prev_sesid = prev_ses_info["session_id"]
+
+            if (datetime.fromisoformat(ts) - datetime.fromisoformat(prev_ts)).total_seconds() / 60 > gap_minutes:
+                res.append(prev_ses_info.copy())
+                prev_ses_info = {
+                    "user_id" : usr,
+                    "session_id" : prev_sesid+1,
+                    "start" : ts,
+                    "end" : ts,
+                    "event_count" : 1
+                }
+            else:
+                prev_ses_info["end"] = ts
+                prev_ses_info["event_count"] += 1
+        res.append(prev_ses_info.copy())
+    return res
+        
 
 def test_p7():
     result = build_sessions(P7_DATA)
