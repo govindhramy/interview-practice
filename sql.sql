@@ -1,12 +1,4 @@
 -- ============================================================================
--- Data Engineering Interview Prep — SQL Practice (PostgreSQL)
--- Copy-paste into CoderPad. Each problem has:
---   - Table creation + data
---   - Your query stub (TODO)
---   - Expected results as comments
--- ============================================================================
-
--- ============================================================================
 -- P1. Group and Aggregate — total spend per user per category
 -- Expected:
 --   u1 | electronics | 80.0
@@ -31,7 +23,10 @@ INSERT INTO p1_purchases VALUES
     ('u3', 5.0, 'books');
 
 -- TODO: write your query
--- SELECT ... FROM p1_purchases ...;
+SELECT user_id, category, sum(amount)
+FROM p1_purchases 
+group by 1,2
+;
 
 
 -- ============================================================================
@@ -53,7 +48,10 @@ INSERT INTO p2_scores VALUES
     ('Eve',     85, '2024-01-01 10:00:00');
 
 -- TODO: write your query
--- SELECT ... FROM p2_scores ...;
+SELECT *
+FROM p2_scores 
+order by score desc, ts asc
+;
 
 
 -- ============================================================================
@@ -79,7 +77,16 @@ INSERT INTO p3_signups VALUES
     ('c@test.com', '2024-01-01', 'paid');
 
 -- TODO: write your query (hint: ROW_NUMBER with careful ORDER BY)
--- SELECT ... FROM p3_signups ...;
+with ranked as (
+  SELECT 
+    *,
+    RANK() over (PARTITION BY email order by signup_date, case when source = 'organic' then 0 else 1 end) as rnk
+  FROM p3_signups
+)
+SELECT email, signup_date, source
+FROM ranked
+WHERE rnk = 1
+;
 
 
 -- ============================================================================
@@ -102,8 +109,16 @@ INSERT INTO p4_stream_b VALUES
     ('2024-01-01 13:00:00', 'b3');
 
 -- TODO: write your query (hint: UNION ALL + ORDER BY with stream source for tiebreak)
--- SELECT ... ;
-
+select ts, "value"
+from (
+  SELECT *, 'a' as stream
+  from p4_stream_a
+  union ALL
+  SELECT *, 'b' as stream
+  from p4_stream_b
+) merged
+order by ts, stream
+;
 
 -- ============================================================================
 -- P5. Window Lookback — add prev_action per user
@@ -129,7 +144,13 @@ INSERT INTO p5_actions VALUES
     ('u2', 'click',    '2024-01-01 10:06:00');
 
 -- TODO: write your query (hint: LAG window function)
--- SELECT ... FROM p5_actions ...;
+SELECT 
+  user_id,
+  "action",
+  lag("action") over (partition by user_id order by ts) as prev_action
+
+FROM p5_actions
+;
 
 
 -- ============================================================================
@@ -160,7 +181,14 @@ INSERT INTO p6_statuses VALUES
 -- u3 expected: active(10:00), inactive(12:00)
 
 -- TODO: write your query (hint: LAG + filter where status != prev_status OR prev is NULL)
--- SELECT ... FROM p6_statuses ...;
+with prev as (
+  SELECT
+    *,
+    lag(status) over (partition by user_id order by ts) as prev_status
+  FROM p6_statuses
+)
+select user_id, status, ts from prev where status <> prev_status or prev_status is null
+;
 
 
 -- ============================================================================
@@ -187,7 +215,28 @@ INSERT INTO p7_events VALUES
 -- TODO: write your query
 -- (hint: LAG to get prev timestamp, flag new session if gap > 30 min,
 --  SUM the flags as running count to assign session_id, then GROUP BY)
--- SELECT ... FROM p7_events ...;
+with flag as (
+  SELECT 
+    *,
+    case when extract(minute from (ts - lag(ts) over (partition by user_id order by ts))) > 30 then 1 else 0 end as ses_flag
+  FROM p7_events
+), ses as (
+  select 
+    user_id, 
+    "event", 
+    ts,
+    sum(ses_flag) over (partition by user_id order by ts) + 1 as ses_id
+  from Flag
+)
+select 
+  user_id,
+  ses_id,
+  max(ts) - min(ts) as ses_time,
+  count(*) as event_cnt
+from ses
+group by 1,2
+order by 1,2
+;
 
 
 -- ============================================================================
