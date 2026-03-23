@@ -261,7 +261,21 @@ INSERT INTO p8_readings VALUES
 
 -- TODO: write your query
 -- (hint: FIRST_VALUE / LAST_VALUE window functions, or subquery with MIN/MAX ts)
--- SELECT ... FROM p8_readings ...;
+with windowed as (
+  SELECT 
+    device_id,
+    FIRST_VALUE(reading) over (partition by device_id order by ts) as first_reading,
+    LAST_VALUE(reading) over (partition by device_id order by ts ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_reading
+  FROM p8_readings
+)
+select 
+  device_id,
+  first_reading,
+  last_reading,
+  count(1) as cnt
+from windowed
+group by 1,2,3
+;
 
 
 -- ============================================================================
@@ -290,7 +304,16 @@ INSERT INTO p9_metrics VALUES
     ('m1', 'pressure', 101, '2024-01-01 10:10:00');
 
 -- TODO: write your query (hint: LAG to get prev_value, filter where prev <= 100 AND current > 100)
--- SELECT ... FROM p9_metrics ...;
+with crossings as (
+  SELECT 
+    *,
+    case when value > 100 and lag("value") over (partition by metric order by ts) <= 100 then true else false end as crossing 
+  FROM p9_metrics 
+)
+select machine_id, metric , value, ts
+from crossings
+where crossing = true
+;
 
 
 -- ============================================================================
@@ -314,7 +337,19 @@ INSERT INTO p10_heartbeats VALUES
     ('s3', '2024-01-01 10:00:00');
 
 -- TODO: write your query (hint: LAG + EXTRACT(EPOCH FROM ...) for seconds diff)
--- SELECT ... FROM p10_heartbeats ...;
+with lag as (
+  SELECT 
+    *,
+    lag(ts) over (partition by sensor_id order by ts) as prev_ts
+  FROM p10_heartbeats
+)
+select 
+  sensor_id,
+  prev_ts as gap_start,
+  ts as gap_end
+from lag 
+where ts - prev_ts > interval '5' MINUTE
+;
 
 
 -- ============================================================================
@@ -355,7 +390,43 @@ INSERT INTO p11_funnel VALUES
 -- TODO: write your query
 -- (hint: get MIN timestamp per user per step, then self-join or use
 --  conditional aggregation to check each step happened after previous)
--- SELECT ... FROM p11_funnel ...;
+with prev as (
+  SELECT
+    *,
+    lag(event_type) over (partition by user_id order by ts) as prev_event
+  FROM p11_funnel
+), validity as (
+  SELECT
+    *,
+    sum( 
+      case
+        when 
+          (event_type = 'page_view' and (prev_event is null or prev_event = 'page_view'))
+          or (event_type = 'add_to_cart' and prev_event in ('page_view','add_to_cart'))
+          or (event_type = 'checkout' and prev_event = 'add_to_cart')
+          or (event_type = 'purchase' and prev_event = 'checkout')
+        then 0 
+        else 1
+      end 
+    ) over (partition by user_id order by ts) as grp
+    from prev
+), final as (
+  select 
+    user_id, 
+    LAST_VALUE(event_type) over (partition by user_id order by ts ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_valid_event
+  from validity
+  where grp = 0
+  )
+select 
+  user_id,
+  last_valid_event,
+  case 
+    when last_valid_event = 'purchase' then 'completed=true'
+    else 'completed=false'
+  end
+from final
+group by 1,2
+;
 
 
 -- ============================================================================
@@ -390,7 +461,24 @@ INSERT INTO p12_tickets VALUES
 
 -- TODO: write your query
 -- (hint: pivot MIN ts per ticket per status, compute duration, flag breach)
--- SELECT ... FROM p12_tickets ...;
+with pivoted as (
+  SELECT 
+    ticket_id,
+    min(case when status = 'opened' then ts end)as opn_ts,
+    min(case when status = 'assigned' then ts end) as asgn_ts,
+    min(case when status = 'resolved' then ts end) as res_ts
+  FROM p12_tickets
+  group by 1
+)
+select 
+  ticket_id,
+  case 
+    when opn_ts is not null and res_ts is not null then res_ts - opn_ts 
+  end as res_time,
+  case when opn_ts is not null and res_ts is not null and res_ts - opn_ts >= interval '5' hour then true else false 
+  end as breached
+from pivoted
+;
 
 
 -- ============================================================================
@@ -420,7 +508,25 @@ INSERT INTO p13_events VALUES
 -- TODO: write your query
 -- (hint: get distinct users per day, self-join day to day+1,
 --  count retained / count total per day)
--- SELECT ... FROM p13_events ...;
+with dist as (
+  SELECT 
+    distinct user_id, event_date
+  FROM p13_events
+)
+SELECT 
+  td.event_date,
+  count(td.user_id) as dau,
+  case 
+    when max(tm.event_date) is null then null 
+    else 100.0 * count(tm.user_id) / count(td.user_id)
+  end as retention
+FROM dist td
+  LEFT JOIN dist tm
+    ON td.event_date = tm.event_date - interval '1' DAY
+    AND td.user_id = tm.user_id
+group by 1
+order by 1
+;
 
 
 -- ============================================================================
@@ -461,7 +567,11 @@ INSERT INTO p14_cdc VALUES
 -- TODO: write your query
 -- (hint: get latest record per tbl+pk using ROW_NUMBER ORDER BY ts DESC,
 --  then filter out deletes)
--- SELECT ... FROM p14_cdc ...;
+SELECT
+  *,
+  
+FROM p14_cdc
+;
 
 
 -- ============================================================================
