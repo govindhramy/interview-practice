@@ -375,7 +375,32 @@ def first_last_per_device(records):
     # TODO: return dict {device_id: {"first_reading": ..., "last_reading": ..., "count": ...}}
     # "first" and "last" are by timestamp, even if data is unsorted
     # count includes all records (even null readings)
-    pass
+    
+    res = {}
+
+    for record in records:
+        id = record["device_id"]
+        r = record["reading"]
+        ts = record["timestamp"]
+
+        if id not in res:
+            res[id] = {
+                "first_reading": r, 
+                "first_reading_ts": ts, 
+                "last_reading": r,
+                "last_reading_ts": ts,  
+                "count": 1
+                }
+        else:
+            if ts > res[id]["last_reading_ts"]:
+                res[id]["last_reading"] = r
+                res[id]["last_reading_ts"] = ts
+            elif ts < res[id]["first_reading_ts"]:
+                res[id]["first_reading"] = r
+                res[id]["first_reading_ts"] = ts
+            res[id]["count"] += 1
+    
+    return res
 
 def test_p8():
     result = first_last_per_device(P8_DATA)
@@ -418,7 +443,23 @@ def detect_threshold_crossings(records, threshold=100):
     # TODO: return list of {"machine_id", "metric", "crossed_at", "value"}
     # A crossing = value goes from <=threshold to >threshold
     # Handle out-of-order data (sort by timestamp first), missing values
-    pass
+    
+    #  (pre_threshold_reading,pre_threshold_reading_ts,post_threshold_reading,post_threshold_reading_ts)
+    records.sort(key=lambda rec: rec["timestamp"])
+    res = []
+    prev = defaultdict(lambda: (None,None))
+    for rec in records:
+        m_id = rec["machine_id"]
+        m = rec["metric"]
+        val = rec["value"]
+        ts = rec["timestamp"]
+
+        prev_ts, prev_val = prev[(m_id,m)]
+        if prev_ts is not None and prev_val is not None and prev_val < threshold and val >= threshold:
+            res.append({"machine_id": m_id, "metric": m, "crossed_at": ts, "value": val})
+        
+        prev[(m_id,m)] = (ts,val)
+    return res
 
 def test_p9():
     result = detect_threshold_crossings(P9_DATA, threshold=100)
@@ -467,7 +508,23 @@ P10_DATA_UNSORTED = [
 
 def detect_gaps(records, max_gap_seconds=300):
     # TODO: return list of {"sensor_id", "gap_start", "gap_end", "gap_duration_sec"}
-    pass
+
+    records.sort(key=lambda rec: rec["timestamp"])
+
+    prev = {}
+    res = []
+
+    for rec in records:
+        sens_id = rec["sensor_id"]
+        ts = rec["timestamp"]
+
+        if sens_id in prev:
+            prev_ts = prev[sens_id]
+            time_diff = (datetime.fromisoformat(ts) - datetime.fromisoformat(prev_ts)).total_seconds()
+            if time_diff > 300:
+                res.append({"sensor_id":sens_id, "gap_start":prev_ts, "gap_end":ts, "gap_duration_sec":time_diff})
+        prev[sens_id] = ts
+    return res
 
 def test_p10():
     result = detect_gaps(P10_DATA)
@@ -521,7 +578,36 @@ P11_DATA = [
 def compute_funnel(records, steps=FUNNEL_STEPS):
     # TODO: return dict {user_id: {"furthest_step": str, "completed_funnel": bool}}
     # A step only counts if it happened AFTER the previous step in the funnel
-    pass
+
+    usr_activity = defaultdict(list)
+    for rec in records:
+        usr_activity[rec["user_id"]].append(
+            (rec["timestamp"],rec["event_type"])
+            )
+    for events in usr_activity.values():
+        events.sort(key=lambda e: e[0])
+
+    prev_step = {
+        "page_view": None, 
+        "add_to_cart": "page_view", 
+        "checkout": "add_to_cart", 
+        "purchase": "checkout"
+    }
+    
+    res = {}
+    for usr, activities in usr_activity.items():
+        steps_completed = set()
+        latest = None
+        for activity in activities:
+            event_type = activity[1]
+            if prev_step[event_type] is None or prev_step[event_type] in steps_completed:
+                if event_type not in steps_completed:
+                    latest = event_type
+                    steps_completed.add(latest)
+            else:
+                break
+        res[usr] = {"furthest_step": latest, "completed_funnel": latest == "purchase"}
+    return res
 
 def test_p11():
     result = compute_funnel(P11_DATA)
