@@ -567,11 +567,11 @@ INSERT INTO p14_cdc VALUES
 -- TODO: write your query
 -- (hint: get latest record per tbl+pk using ROW_NUMBER ORDER BY ts DESC,
 --  then filter out deletes)
-SELECT
-  *,
+-- SELECT
+--   *,
   
-FROM p14_cdc
-;
+-- FROM p14_cdc
+-- ;
 
 
 -- ============================================================================
@@ -599,7 +599,13 @@ INSERT INTO p15_departments VALUES
 
 -- TODO: write your query
 -- (hint: LEAD window function to get next effective_date as end_date)
--- SELECT ... FROM p15_departments ...;
+SELECT
+  employee_id,
+  department,
+  effective_date as start_date,
+  lead(effective_date) over (partition by employee_id order by effective_date) as end_date
+FROM p15_departments
+;
 
 
 -- ============================================================================
@@ -638,8 +644,23 @@ FROM generate_series(0, 9) AS i;
 --   COUNT(*) OVER (PARTITION BY api_key, endpoint
 --                  ORDER BY ts
 --                  RANGE BETWEEN INTERVAL '60 seconds' PRECEDING AND CURRENT ROW)
--- SELECT ... FROM p16_requests ...;
-
+with agg as (
+  SELECT 
+    api_key,
+    endpoint,
+    ts,
+    count(*) over (partition by api_key, endpoint order by ts range between interval '60' second preceding and current row) as min_wind_cnt
+  FROM p16_requests
+)
+select 
+  api_key,
+  endpoint,
+  ts
+from agg 
+where api_key = 'key1' 
+  and endpoint = '/api/data'
+  and min_wind_cnt > 100
+;
 
 -- ============================================================================
 -- P17. Log-Level Anomaly Spotter
@@ -680,37 +701,26 @@ FROM generate_series(0, 23) AS h, generate_series(1, 100) AS i;
 -- TODO: write your query
 -- (hint: compute hourly counts per service, compute error_rate per hour,
 --  compute avg error_rate per service, flag where hourly > 2 * avg)
--- SELECT ... FROM p17_logs ...;
-
-
--- ============================================================================
--- SQL PATTERNS CHEAT SHEET (for reference while practicing)
--- ============================================================================
---
--- WINDOW FUNCTIONS:
---   LAG(col, 1) OVER (PARTITION BY x ORDER BY ts)     -- previous row's value
---   LEAD(col, 1) OVER (PARTITION BY x ORDER BY ts)    -- next row's value
---   ROW_NUMBER() OVER (PARTITION BY x ORDER BY ts)     -- rank within group
---   SUM(flag) OVER (PARTITION BY x ORDER BY ts)        -- running sum (session IDs)
---   FIRST_VALUE(col) OVER (PARTITION BY x ORDER BY ts) -- first in group
---   LAST_VALUE(col) OVER (PARTITION BY x ORDER BY ts
---     ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
---
--- RANGE FRAME (P16 rate limiting):
---   COUNT(*) OVER (PARTITION BY x ORDER BY ts
---     RANGE BETWEEN INTERVAL '60 seconds' PRECEDING AND CURRENT ROW)
---
--- TIME HELPERS:
---   EXTRACT(EPOCH FROM (ts2 - ts1))              -- seconds between timestamps
---   EXTRACT(HOUR FROM ts)                         -- hour of day (0-23)
---   DATE_TRUNC('hour', ts)                        -- truncate to hour
---   ts + INTERVAL '30 minutes'                    -- timestamp arithmetic
---
--- CONDITIONAL AGGREGATION:
---   SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END)  -- count by condition
---   MIN(CASE WHEN event = 'X' THEN ts END)              -- first timestamp of type
---
--- USEFUL PATTERNS:
---   WITH cte AS (...) SELECT ... FROM cte        -- CTEs for readability
---   FILTER (WHERE condition)                      -- PostgreSQL aggregate filter
---   COALESCE(x, default)                          -- NULL handling
+with agg as (
+  SELECT 
+    service,
+    date_trunc('hour',ts) as hr,
+    100.0 * count(case when log_level = 'ERROR' then 1 end) / nullif(count(1),0) as err_rate,
+    grouping(date_trunc('hour',ts)) as is_total_agg
+  FROM p17_logs
+  group by grouping sets (
+    (1,2), (1)
+  )
+)
+select
+  service,
+  hr
+from agg hrly
+where is_total_agg = 0
+  and err_rate > 2 * (
+    select err_rate 
+    from agg total 
+    where hrly.service = total.service 
+      and total.is_total_agg = 1
+  )
+;
