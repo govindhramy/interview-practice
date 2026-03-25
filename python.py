@@ -8,7 +8,7 @@ Copy-paste into CoderPad. Each problem has:
 
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import List
 
 # ============================================================================
@@ -782,7 +782,21 @@ def replay_cdc(records):
     # TODO: return {table_name: {pk: current_row_data}}
     # deleted rows should not appear in output
     # sort by timestamp before replaying
-    pass
+
+    res = {}
+
+    for record in records:
+        table = record["table"]
+        pk = record["pk"]
+        op = record["op"]
+        data = record["data"]
+        ts = record["timestamp"]
+
+        if (table,pk) not in res or ts > res[(table,pk)][0]:
+            res[(table,pk)] = (ts, op, data)
+    
+    return {table: {pk: data} for (table,pk),(ts, op, data) in res.items() if op != "delete"}
+
 
 def test_p14():
     result = replay_cdc(P14_DATA)
@@ -823,7 +837,21 @@ def build_scd2(records):
     # TODO: return list of {"employee_id", "department", "start_date", "end_date", "is_current"}
     # end_date = None and is_current = True for latest record
     # Sort by effective_date before processing
-    pass
+    
+    res = []
+    emp_curr = {}
+    for rec in sorted(records,key=lambda r: r["effective_date"]):
+        eid = rec["employee_id"]
+        dpt = rec["department"]
+        ts = rec["effective_date"]
+
+        if eid in emp_curr:
+            res.append({"employee_id":eid, "department":emp_curr[eid][0], "start_date":emp_curr[eid][1], "end_date":ts, "is_current":False})
+        emp_curr[eid] = (dpt, ts)
+    
+    for eid,(dept,ts) in emp_curr.items():
+        res.append({"employee_id":eid, "department":dept, "start_date":ts, "end_date":None, "is_current":True})
+    return res
 
 def test_p15():
     result = build_scd2(P15_DATA)
@@ -883,7 +911,27 @@ for i in range(10):
 
 def detect_rate_breaches(records, max_requests=100, window_seconds=60):
     # TODO: return list of {"api_key", "endpoint", "window_start", "request_count"} for breaches
-    pass
+    res = []
+    queues = defaultdict(deque)
+    whitelisted_keys = {"key2"}
+    whitelisted_endpoints = {"/api/health"}
+    
+    for record in sorted(records,key=lambda r: r["timestamp"]):
+        key = record["api_key"]
+        endpoint = record["endpoint"]
+        ts = record["timestamp"]
+
+        if endpoint in whitelisted_endpoints  or key in whitelisted_keys:
+            continue
+
+        q = queues[key]
+        while q and (datetime.fromisoformat(ts) - datetime.fromisoformat(q[0])).total_seconds() > window_seconds:
+            q.popleft()
+        q.append(ts)
+
+        if len(q) > max_requests:
+            res.append({"api_key":key, "endpoint":endpoint, "window_start":q[0], "request_count":len(q)})
+    return res
 
 def test_p16():
     result = detect_rate_breaches(P16_DATA)
@@ -932,7 +980,37 @@ for hour in range(24):
 def detect_log_anomalies(records):
     # TODO: return list of {"service", "hour", "error_rate", "avg_error_rate", "is_anomaly": bool}
     # anomaly = hourly error rate > 2x service's overall average error rate
-    pass
+    
+    # (svc,hr):(cnt,err_cnt)
+    grp = defaultdict(lambda:[0,0])
+
+    for rec in records:
+        svc = rec["service"]
+        lvl = rec["log_level"]
+        ts = rec["timestamp"]
+
+        hr = datetime.fromisoformat(ts).hour
+
+        grp[(svc,hr)][0] += 1
+        grp[(svc,None)][0] += 1
+        if lvl == "ERROR":
+            grp[(svc,hr)][1] += 1
+            grp[(svc,None)][1] += 1
+    
+    
+    res = []
+
+    for (svc,hr),(cnt,err_cnt) in grp.items():
+        if hr is None:
+            continue
+        
+        avg_err = 100.0*grp[(svc,None)][1]/grp[(svc,None)][0]
+        err = 100.0*err_cnt/cnt
+
+        res.append({"service":svc, "hour":hr, "error_rate":err, "avg_error_rate":avg_err, "is_anomaly": err>2*avg_err})
+
+    return res
+
 
 def test_p17():
     result = detect_log_anomalies(P17_DATA)
