@@ -650,7 +650,37 @@ P12_DATA = [
 def detect_sla_breaches(records, sla_hours=4):
     # TODO: return list of {"ticket_id", "open_time", "resolve_time", "duration_hrs", "breached": bool}
     # Handle: unresolved tickets, missing opened event, duplicate statuses
-    pass
+
+    #  we just maintain the earlies opened and earliest resolved timestamps
+    ticket_status = defaultdict(lambda: [None, None])
+    for rec in records:
+        ticket_id = rec["ticket_id"]
+        status = rec["status"]
+        ts = rec["timestamp"]
+
+        opened_ts, resolved_ts = ticket_status[ticket_id]
+
+        if status == "opened":
+            if opened_ts is None or  ts < opened_ts:
+                ticket_status[ticket_id][0] = ts
+        if status == "resolved":
+            if resolved_ts is None or  ts < resolved_ts:
+                ticket_status[ticket_id][1] = ts
+    
+    res = []
+
+    for id,(opened_ts,resolved_ts) in ticket_status.items():
+        if opened_ts and resolved_ts:
+            gap = (datetime.fromisoformat(resolved_ts) - datetime.fromisoformat(opened_ts)).total_seconds()/3600
+            res.append({
+                "ticket_id":id, 
+                "open_time":opened_ts, 
+                "resolve_time":resolved_ts, 
+                "duration_hrs": gap, 
+                "breached": gap >= 5
+            })
+    return res
+    
 
 def test_p12():
     result = {r["ticket_id"]: r for r in detect_sla_breaches(P12_DATA)}
@@ -689,7 +719,24 @@ def compute_dau_retention(records):
     # TODO: return list of {"date", "dau", "d1_retention_pct"}
     # d1_retention_pct = % of today's users who are also active tomorrow
     # Last day's retention can be None (no next day data)
-    pass
+
+    daily_metrics = defaultdict(set)
+    for record in records:
+        id = record["user_id"]
+        date = record["date"]
+        daily_metrics[date].add(id)
+        
+    res=[]
+
+    for date, users in daily_metrics.items():
+        nxt_date = (datetime.fromisoformat(date) + timedelta(days=1)).strftime("%Y-%m-%d")
+        metric = {"date":date, "dau":len(users), "d1_retention_pct":None}
+        if nxt_date in daily_metrics:
+            metric["d1_retention_pct"] = 100.0 * (len(daily_metrics[date].intersection(daily_metrics[nxt_date]))) / len(daily_metrics[date])
+        res.append(metric)
+     
+
+    return res
 
 def test_p13():
     result = {r["date"]: r for r in compute_dau_retention(P13_DATA)}
