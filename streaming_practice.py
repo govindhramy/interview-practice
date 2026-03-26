@@ -36,17 +36,38 @@ class StreamingStatusChangeDetector:
     Skip events with missing/null status.
     """
     def __init__(self):
-        raise NotImplementedError
-        pass
+        self.usr_status = {}
 
     def process_event(self, event):
         """
         event: {"user_id": str, "status": str or None, "timestamp": str}
         Returns: {"user_id", "status", "timestamp", "prev_status"} if change detected, else None
         """
-        raise NotImplementedError
-        pass
+        usr_id =  event["user_id"]
+        status =  event["status"]
+        ts =  event["timestamp"]
 
+        if status is None:
+            return None
+        res = None
+        if usr_id in self.usr_status:
+            prev_status = self.usr_status[usr_id][1]
+            if status != prev_status:
+                res = {
+                    "user_id":usr_id, 
+                    "status":status, 
+                    "timestamp":ts, 
+                    "prev_status":self.usr_status[usr_id][1]
+                }
+        else:
+            res = {
+                "user_id":usr_id, 
+                "status":status, 
+                "timestamp":ts, 
+                "prev_status":None
+            }
+        self.usr_status[usr_id] = (ts, status)
+        return res
 
 def test_s1():
     detector = StreamingStatusChangeDetector()
@@ -63,6 +84,7 @@ def test_s1():
     results = []
     for e in events:
         r = detector.process_event(e)
+        print(r)
         if r is not None:
             results.append(r)
 
@@ -94,8 +116,8 @@ class StreamingSessionBuilder:
     """
     def __init__(self, gap_minutes=30):
         self.gap_minutes = gap_minutes
-        raise NotImplementedError
-        pass
+        # (ses_id,start,end,cnt)
+        self.sessions = {}
 
     def process_event(self, event):
         """
@@ -103,13 +125,42 @@ class StreamingSessionBuilder:
         Returns: completed session dict if a previous session just closed, else None
         Session dict: {"user_id", "session_id", "start", "end", "event_count"}
         """
-        raise NotImplementedError
-        pass
+        usr = event["user_id"]
+        ts = event["timestamp"]
+        
+        if usr in self.sessions:
+            curr_ses_end = self.sessions[usr][2]
+            if (datetime.fromisoformat(ts) - datetime.fromisoformat(curr_ses_end)).total_seconds() > self.gap_minutes*60:
+                res = {
+                    "user_id": usr, 
+                    "session_id": self.sessions[usr][0], 
+                    "start": self.sessions[usr][1], 
+                    "end": self.sessions[usr][2], 
+                    "event_count": self.sessions[usr][3]
+                }
+                self.sessions[usr] = [self.sessions[usr][0]+1,ts,ts,1]
+                return res
+            else:
+                self.sessions[usr][2] = ts 
+                self.sessions[usr][3] += 1
+        else:
+            self.sessions[usr] = [1,ts,ts,1]
+        return None
 
     def flush(self):
         """Close all open sessions and return them as a list."""
-        raise NotImplementedError
-        pass
+        res = []
+        for usr,ses in self.sessions.items():
+            ses_id,start,end,cnt = ses
+            res.append({
+                "user_id":usr, 
+                "session_id":ses_id, 
+                "start":start, 
+                "end":end, 
+                "event_count":cnt
+            })
+        self.sessions = {}
+        return res
 
 
 def test_s2():
@@ -165,8 +216,7 @@ class StreamingThresholdMonitor:
     """
     def __init__(self, threshold=100):
         self.threshold = threshold
-        raise NotImplementedError
-        pass
+        self.state = {}
 
     def process_event(self, event):
         """
@@ -174,9 +224,27 @@ class StreamingThresholdMonitor:
         Returns: {"machine_id", "metric", "crossed_at", "value", "prev_value"} if crossed, else None
         Skip events with None value (sensor error).
         """
-        raise NotImplementedError
-        pass
+        
+        mid = event["machine_id"]
+        m = event["metric"]
+        v = event["value"]
+        ts = event["timestamp"]
 
+        if v is None:
+            return None
+        
+        res = None
+
+        if (mid,m) in self.state and self.state[(mid,m)] < self.threshold and v >= self.threshold:
+            res = {
+                "machine_id":mid, 
+                "metric":m, 
+                "crossed_at":ts, 
+                "value":v, 
+                "prev_value":self.state[(mid,m)]
+            }
+        self.state[(mid,m)] = v
+        return res
 
 def test_s3():
     monitor = StreamingThresholdMonitor(threshold=100)
