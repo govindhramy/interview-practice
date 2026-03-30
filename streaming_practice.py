@@ -12,7 +12,7 @@ This simulates how Flink/Spark Streaming/Kafka Streams actually work.
 """
 
 from datetime import datetime, timedelta
-from collections import defaultdict
+from collections import defaultdict, deque
 
 
 # ============================================================================
@@ -294,8 +294,8 @@ class TumblingWindowCounter:
     """
     def __init__(self, window_minutes=5):
         self.window_minutes = window_minutes
-        raise NotImplementedError
-        pass
+        self.window_start = None
+        self.usr_cnts = defaultdict(int)
 
     def _get_window_start(self, timestamp_str):
         """Helper: return the window start for a given timestamp."""
@@ -309,13 +309,36 @@ class TumblingWindowCounter:
         Returns: list of {"user_id", "window_start", "window_end", "count"} for any
                  windows that just closed, or empty list.
         """
-        raise NotImplementedError
-        pass
+        ts = event["timestamp"]
+        usr = event["user_id"]
+        
+        window_start = self._get_window_start(ts)
+
+        res = []
+        if self.window_start is None:
+            self.window_start = window_start
+        elif window_start > self.window_start:
+            res = [{
+                "user_id":usr, 
+                "window_start":self.window_start, 
+                "window_end":window_start, 
+                "count":cnt} for usr,cnt in self.usr_cnts.items()]
+            self.window_start = window_start
+            self.usr_cnts = defaultdict(int)
+        self.usr_cnts[usr] += 1
+
+        return res
 
     def flush(self):
         """Emit all currently open windows."""
-        raise NotImplementedError
-        pass
+        res = [{
+                "user_id":usr, 
+                "window_start":self.window_start, 
+                "window_end":None, 
+                "count":cnt} for usr,cnt in self.usr_cnts.items()]
+        self.window_start = None
+        self.usr_cnts = defaultdict(int)
+        return res
 
 
 def test_s4():
@@ -377,16 +400,28 @@ class SlidingWindowRateCounter:
     def __init__(self, max_events=5, window_seconds=60):
         self.max_events = max_events
         self.window_seconds = window_seconds
-        raise NotImplementedError
-        pass
+        self.usr_windows = defaultdict(deque)
 
     def process_event(self, event):
         """
         event: {"user_id": str, "timestamp": str}
         Returns: {"user_id", "timestamp", "event_count_in_window"} if breach, else None
         """
-        raise NotImplementedError
-        pass
+        usr = event["user_id"]
+        ts = event["timestamp"]
+
+        q = self.usr_windows[usr]
+
+        while q and (datetime.fromisoformat(ts) - datetime.fromisoformat(q[0])).seconds > self.window_seconds:
+            q.popleft()
+        
+        q.append(ts)
+        
+        if len(q) > self.max_events:
+            return {"user_id":usr, "timestamp":ts, "event_count_in_window":len(q)}
+        else:
+            return None
+
 
 
 def test_s5():
@@ -445,16 +480,23 @@ class WatermarkProcessor:
     """
     def __init__(self, allowed_lateness_seconds=300):
         self.allowed_lateness_seconds = allowed_lateness_seconds
-        raise NotImplementedError
-        pass
+        self.watermark = None
 
     def process_event(self, event):
         """
         event: {"id": str, "event_time": str, "processing_time": str, "data": any}
         Returns: {"status": "processed" | "late", "event": event, "watermark": str}
         """
-        raise NotImplementedError
-        pass
+        ts = event["event_time"]
+
+        if self.watermark and datetime.fromisoformat(ts) < self.watermark:
+            return {"status": "late", "event": event, "watermark": self.watermark.isoformat}
+
+        ts_minus = datetime.fromisoformat(ts) - timedelta(seconds=self.allowed_lateness_seconds)
+
+        self.watermark = max(self.watermark, ts_minus) if self.watermark else ts_minus
+
+        return {"status": "processed", "event": event, "watermark": self.watermark.isoformat}
 
 
 def test_s6():
@@ -507,8 +549,7 @@ class StreamingDeduplicator:
     """
     def __init__(self, dedup_window_seconds=600):  # 10 min window
         self.dedup_window_seconds = dedup_window_seconds
-        raise NotImplementedError
-        pass
+        self.state:dict[str,int] = {}
 
     def process_event(self, event):
         """
@@ -516,13 +557,23 @@ class StreamingDeduplicator:
         Returns: {"status": "new" | "duplicate", "event_id": str}
         Also evicts expired entries from state.
         """
-        raise NotImplementedError
-        pass
+        event_id = event["event_id"]
+        ts = int(datetime.fromisoformat(event["timestamp"]).timestamp())
+
+        expired = [id for id, expiry in self.state.items() if expiry < ts]
+        for id in expired:
+            del self.state[id]
+        
+        if event_id not in self.state:
+            self.state[event_id] = ts + self.dedup_window_seconds
+            return {"status": "new", "event_id": event_id}
+        else:
+            self.state[event_id] = ts + self.dedup_window_seconds
+            return {"status": "duplicate", "event_id": event_id}
 
     def state_size(self):
         """Return current number of event IDs being tracked (for testing memory management)."""
-        raise NotImplementedError
-        pass
+        return len(self.state)
 
 
 def test_s7():
@@ -581,32 +632,77 @@ class StreamingEnricher:
     """
     def __init__(self, timeout_seconds=30):
         self.timeout_seconds = timeout_seconds
-        raise NotImplementedError
-        pass
+        self.profiles:dict[str,dict[str,str]] = {}
+        self.pending_clicks:dict[str,list[tuple]] = defaultdict(list)
 
     def process_click(self, event):
         """
         event: {"click_id": str, "user_id": str, "timestamp": str}
         Returns: enriched event if profile available, else None (buffered).
         """
-        raise NotImplementedError
-        pass
+        click_id = event["click_id"]
+        user_id = event["user_id"]
+        ts = datetime.fromisoformat(event["timestamp"])
+
+        if user_id in self.profiles:
+            name = self.profiles[user_id]["name"]
+            segment = self.profiles[user_id]["segment"]
+            return {
+                "click_id": click_id, 
+                "user_id": user_id, 
+                "profile": {"name": name, "segment": segment}
+            }
+        else:
+            self.pending_clicks[user_id].append((click_id,ts))
+            return None
+
 
     def process_profile(self, event):
         """
         event: {"user_id": str, "name": str, "segment": str, "timestamp": str}
         Returns: list of enriched events for any buffered clicks that can now be joined.
         """
-        raise NotImplementedError
-        pass
+        user_id = event["user_id"]
+        name = event["name"]
+        segment = event["segment"]
+
+        res = []
+
+        if user_id in self.pending_clicks:
+            for click_id,_ in self.pending_clicks[user_id]:
+                res.append({
+                    "click_id": click_id,
+                    "user_id": user_id,
+                    "profile": {"name":name, "segment":segment}
+                })
+            del self.pending_clicks[user_id]
+        self.profiles[user_id] = {"name": name, "segment":segment}
+        return res
 
     def check_timeouts(self, current_time_str):
         """
         Emit any buffered clicks that have exceeded the timeout.
         Returns: list of {"click_id", "user_id", "profile": None, "status": "timeout"}
         """
-        raise NotImplementedError
-        pass
+        res = []
+        updated_pending_clicks = {}
+        for user_id, clicks in self.pending_clicks.items():
+            acitve_clicks = []
+            for click_id, ts in clicks:
+                if ts < datetime.fromisoformat(current_time_str) - timedelta(seconds=self.timeout_seconds):
+                    res.append({
+                        "click_id":click_id, 
+                        "user_id":user_id, 
+                        "profile": None, 
+                        "status": "timeout"
+                    })
+                else:
+                    acitve_clicks.append((click_id, ts))
+            updated_pending_clicks[user_id] = acitve_clicks
+        
+        self.pending_clicks = updated_pending_clicks
+        return res
+
 
 
 def test_s8():
