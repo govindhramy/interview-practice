@@ -24,7 +24,26 @@ P1_DATA = [
 
 def group_and_aggregate(records):
     # TODO: return dict like {("u1", "electronics"): 80.0, ("u1", "books"): 20.0, ...}
-    pass
+    result = defaultdict(int)
+
+    for r in records:
+        if r["category"] is None:
+            continue
+        result[(r["user_id"], r["category"])] += r["amount"] or 0
+
+    return result
+
+"""
+Edge cases — how would you handle these?
+
+What if amount is None or missing?
+What if a record has an empty string for category?
+What if amount is negative (refund)?
+
+Scaling: How does this change at 1 billion records in Spark?
+"Spark does a partial sum on each partition first, then shuffles only the partial results for the final aggregation — 
+so network cost is proportional to the number of distinct (user, category) pairs, not the raw record count."
+"""
 
 def test_p1():
     result = group_and_aggregate(P1_DATA)
