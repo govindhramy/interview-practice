@@ -33,17 +33,15 @@ def group_and_aggregate(records):
 
     return result
 
-"""
-Edge cases — how would you handle these?
-
-What if amount is None or missing?
-What if a record has an empty string for category?
-What if amount is negative (refund)?
-
-Scaling: How does this change at 1 billion records in Spark?
-"Spark does a partial sum on each partition first, then shuffles only the partial results for the final aggregation — 
-so network cost is proportional to the number of distinct (user, category) pairs, not the raw record count."
-"""
+# Edge cases — how would you handle these?
+#
+# What if amount is None or missing?
+# What if a record has an empty string for category?
+# What if amount is negative (refund)?
+#
+# Scaling: How does this change at 1 billion records in Spark?
+# "Spark does a partial sum on each partition first, then shuffles only the partial results for the final aggregation —
+# so network cost is proportional to the number of distinct (user, category) pairs, not the raw record count."
 
 def test_p1():
     result = group_and_aggregate(P1_DATA)
@@ -59,9 +57,9 @@ def test_p1():
     print("✅ P1 passed")
 
 
-# ============================================================================
+"""# ============================================================================
 # P2. Sort with Tiebreakers — score desc, then earliest timestamp
-# ============================================================================
+# ============================================================================"""
 
 P2_DATA = [
     {"name": "Alice", "score": 90, "timestamp": "2024-01-03T10:00:00"},
@@ -73,7 +71,7 @@ P2_DATA = [
 
 def sort_with_tiebreakers(records):
     # TODO: return sorted list — score descending, timestamp ascending for ties
-    pass
+    return sorted(records, key=lambda r: (-r["score"],r["timestamp"]))
 
 def test_p2():
     result = sort_with_tiebreakers(P2_DATA)
@@ -91,10 +89,18 @@ def test_p2():
     assert [r["name"] for r in sort_with_tiebreakers(same_score)] == ["B", "A"]
     print("✅ P2 passed")
 
+# Edge cases:
+#
+# What if two records have the same score AND same timestamp — is the output stable?
+# What if score is None?
+# What if timestamps are in different formats (some with milliseconds, some without)?
+#
+# Scaling: This one is interesting — what happens when you need to sort 1B records in Spark? sample -> range-partition -> sort partitions
 
-# ============================================================================
+
+"""# ============================================================================
 # P3. Deduplication — one record per email, earliest signup, prefer organic
-# ============================================================================
+# ============================================================================"""
 
 P3_DATA = [
     {"email": "a@test.com", "signup_date": "2024-01-01", "source": "paid"},
@@ -107,7 +113,25 @@ P3_DATA = [
 
 def deduplicate(records):
     # TODO: return list of one record per email
-    pass
+    grp = {}
+    for r in records:
+        if r["email"] not in grp:
+            grp[r["email"]] = (r["signup_date"], r["source"])
+        else:
+            curr_date = grp[r["email"]][0]
+            if r["signup_date"] < curr_date or (r["signup_date"] == curr_date and r["source"] == "organic"):
+                grp[r["email"]] = (r["signup_date"], r["source"])
+
+    return [{"email": email, "signup_date": signup_date, "source": source} for email,(signup_date, source) in grp.items()]
+
+# Edge cases:
+
+# What if email is None — do you group all null emails together?
+# What if signup_date is null for some records?
+# What if there's a third source like "referral" — does your tiebreaker logic still work?
+# Case sensitivity — is "Organic" the same as "organic"?
+#
+# Scaling: instead of window fn that causes full shuffle we can do grp by which does partial agg bfr shuffle
 
 def test_p3():
     result = {r["email"]: r for r in deduplicate(P3_DATA)}
@@ -123,9 +147,9 @@ def test_p3():
     print("✅ P3 passed")
 
 
-# ============================================================================
+"""# ============================================================================
 # P4. Merge Two Sorted Streams
-# ============================================================================
+# ============================================================================"""
 
 P4_STREAM_A = [
     {"timestamp": "2024-01-01T10:00:00", "value": "a1"},
@@ -141,7 +165,36 @@ P4_STREAM_B = [
 
 def merge_streams(stream_a, stream_b):
     # TODO: return merged sorted list, keep both on collision (stable order: a before b)
-    pass
+    i = 0
+    j = 0
+
+    res = []
+    while i < len(stream_a) and j < len(stream_b):
+        if stream_a[i]["timestamp"] <= stream_b[j]["timestamp"]:
+            res.append(stream_a[i])
+            i += 1
+        else:
+            res.append(stream_b[j])
+            j += 1
+    if i == len(stream_a):
+        res.extend(stream_b[j:])
+    else:
+        res.extend(stream_a[i:])
+
+    return res
+
+# Edge cases:
+#
+# Both streams empty?
+# One stream empty?
+# What if timestamps are not sorted within a stream — does your code assume pre-sorted input?
+# What if a record is missing the timestamp field?
+#
+# Scaling - in a distributed system, global sort is expensive and almost never needed —
+# you sort within partitions for window operations, or you groupBy for aggregations.
+# The merge-two-sorted-streams pattern is really a single-machine concept. for streaming,
+# you'd union both streams into one Kafka topic (or consume both), and your processing framework
+# handles the ordering via event-time windows and watermarks.
 
 def test_p4():
     result = merge_streams(P4_STREAM_A, P4_STREAM_B)
@@ -157,9 +210,9 @@ def test_p4():
     print("✅ P4 passed")
 
 
-# ============================================================================
+"""# ============================================================================
 # P5. Window Lookback — add prev_action per user
-# ============================================================================
+# ============================================================================"""
 
 P5_DATA = [
     {"user_id": "u1", "action": "login", "timestamp": "2024-01-01T10:00:00"},
